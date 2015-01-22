@@ -6,28 +6,29 @@ var selectors = {
     modalSearchSubmit: 'body > nav > div.modal.fade > div.modal-dialog.modal-sm > div > div.modal-footer > button.btn.btn-primary',
     modalSearchInput: 'body > nav > div.modal.fade > div.modal-dialog.modal-sm > div > div.modal-body > form > div > div > input',
 
+    modalFull: 'body > div > div.modal.fade',
+    modalFullEpisodes: 'body > div > div.modal.fade .episodes',
+    modalFullPagiation: 'body > div > div.modal.fade .modal-body .pagination',
+    modalFullSubmit: 'body > div > div.modal.fade > div.modal-dialog.modal-sm > div > div.modal-footer > button.btn.btn-primary',
+
     parent: 'body > div.container div.movies',
     descriptionSelector: 'description-short'
 };
 
-var defaultPoster = 'http://placehold.it/700x400';
+var defaultPoster = '/Oe7HeT0oiojRz6NSQfFu6fIJzi.jpg';
 buildEntry = function(entry) {
-    if (!entry.Poster)
-        entry.Poster = defaultPoster;
-    var template = ['<div data-id=', entry.imdbID, ' class="col-md-4 portfolio-item">', '<a href="#">', '<img class="img-responsive" src="', entry.Poster, '" alt="">',
-        '</a>', '<h3>', '<a href="#">' + entry.Title + '</a>', '</h3>', '</div>'
-    ].join(' ');
-    return $(template);
+    if (entry.poster_path === null)
+        entry.poster_path = defaultPoster;
+    var template = ['<div data-id=', entry.id, ' class="col-md-4 portfolio-item">', '<img class="img-responsive" src="http://image.tmdb.org/t/p/w500', entry.poster_path, '?api_key=2a6fd2d3356476f3bf594deb013e4f76" alt="">', '<h3>', '<a href="#">' + entry.original_name + '</a>', '</h3>', '</div>'].join('');
+    var $element = $(template);
+    $element.data('item', entry);
+    return $element;
 };
 
 buildDescription = function(entry) {
-    if (entry.Actors === 'N/A')
-        return $(['<div class="', selectors.descriptionSelector, '">', '<p> Rating: ', entry.imdbRating, '</p>', '</div>'].join(''));
-
-    var actors = entry.Actors.split(',');
-    actors.splice(3);
-
-    return $(['<div class="', selectors.descriptionSelector, '">', '<p> Rating: ', entry.imdbRating, '</p>', '<p> Actores: ', actors.join(','), '</p>', '</div>'].join(''));
+    return $(['<div class="', selectors.descriptionSelector, '">', '<p> Promedio Votos: ', entry.vote_average, '</p>', '<p> Número Votos: ', entry.vote_count, '</p>',
+        '</div>'
+    ].join(''));
 };
 
 buildGrid = function(entries) {
@@ -41,98 +42,144 @@ buildGrid = function(entries) {
             row = [];
             continue;
         }
-
         row.push(entries[i]);
     }
     row.push(entries[size]);
     result.push(row);
-
     return result;
 };
 
-/*Validar poster*/
-byIdHandler = function(data) {
-    var entry = $('div[data-id=' + data.imdbID + ']');
-    entry.data('info', data);
-
-    if (data.Poster === 'N/A')
-        return;
-
-    entry.find('img').attr('src', data.Poster);
+var page = 1,
+    pages = 1;
+infiniteHandler = function(result) {
+    page = result.page;
+    pages = result.total_pages;
+    drawResults(result.results);
 };
 
-completeInfo = function(movie) {
-    $.getJSON('http://www.omdbapi.com/?i=' + movie.imdbID + '&plot=full&r=json').done(byIdHandler);
+/*
+ * FIXME solo dibujar multiplos de 3
+ */
+var toDraw = [];
+drawResults = function(results) {
+    toDraw = results.splice(9);
+    if (toDraw.length === 0)
+        if (page < pages)
+            $.getJSON(request + '&page=' + (page + 1)).done(infiniteHandler);
+    drawGrid(buildGrid(results.map(buildEntry)));
 };
 
-/*infinite scroll*/
-toDraw = [];
-drawResults = function(result) {
-    toDraw = result.Search.splice(9);
-    drawGrid(buildGrid(result.Search.map(buildEntry)));
-
-    result.Search.forEach(function(entry) {
-        completeInfo(entry);
-    });
-};
-
-/*Falta completar imagen*/
 drawGrid = function(grid) {
     var template = '<div class="row"></div>';
     grid.forEach(function(item) {
         var row = $(template);
-
         item.forEach(function(entry) {
             row.append(entry);
         });
-
         $(selectors.parent).append(row);
     });
 };
 
+var request;
 searchByName = function(text) {
     $(selectors.parent).html('');
     $(selectors.searchLabel).html(text);
-    $.getJSON('http://www.omdbapi.com/?s=' + text + '&r=json').done(drawResults);
+    request = 'http://api.themoviedb.org/3/search/tv?query=' + text + '&api_key=2a6fd2d3356476f3bf594deb013e4f76';
+    $.getJSON(request).done(infiniteHandler);
+};
+
+buildChapterList = function(season){
+    var i, result = [];
+    for(i = 0; i < season.episodes.length; i++)
+        result.push('<li data-id=' + i + ' class="list-group-item">' + season.episodes[i].name + '</li>');
+    return '<ul class="list-group">'+ result.join('') + '</ul>';
+};
+
+fillPage = function(serie, season){
+    /*
+     * TODO Solo pedir el archivo una vez
+     */
+    $.getJSON('http://api.themoviedb.org/3/tv/' + serie.id + '/season/' + season + '?api_key=2a6fd2d3356476f3bf594deb013e4f76').done(function(data){
+        var $element = $('div[data-id=' + serie.id +']');
+        var seasons = $element.data('seasons');
+        if(!seasons)
+            seasons = {};
+        seasons[season] = data;
+        $element.data('seasons', seasons);
+        $(selectors.modalFullEpisodes).html(buildChapterList(data));
+    });
+};
+
+buildPagination = function(seasons) {
+    var i, results = [];
+    for (i = 1; i <= seasons; i++)
+        results.push('<li data-id="' + i + '"><a>' + i + '</a></li>');
+    return results.join('');
+};
+
+completeHandler = function(data, modal, entry) {
+    var $element = $('div[data-id=' + entry.id +']');
+    $element.data('item', data);
+    $(selectors.modalFullPagiation).html(buildPagination(data.number_of_seasons));
+    $(selectors.modalFullPagiation).data('item',entry);
+    fillPage(entry, 1);
 };
 
 clickHandler = function(e) {
-    console.log(this.parent().parent().data('info'));
+    var modal = $(selectors.modalFull);
+    var entry = this.parent().data('item');
+
+    $.getJSON('http://api.themoviedb.org/3/tv/' + entry.id + '?api_key=2a6fd2d3356476f3bf594deb013e4f76').done(function(data) {
+        return completeHandler(data, modal, entry);
+    });
+
+    modal.find('.modal-title').html(entry.original_name);
+    modal.find('.modal-body  div.poster').html(buildEntry(entry).html());
+    modal.modal();
 };
 
 enterHandler = function(e) {
-    var description = buildDescription(this.data('info'));
-    this.append(description);
+    var description = buildDescription(this.parent().data('item'));
+    this.parent().append(description);
 };
 
 leaveHandler = function(e) {
-    this.find('.' + selectors.descriptionSelector).remove();
+    this.parent().find('.' + selectors.descriptionSelector).remove();
+};
+
+scrollHandler = function(e) {
+    if ($(window).scrollTop() + $(window).innerHeight() < $(selectors.parent)[0].scrollHeight)
+        return;
+    drawResults(toDraw);
+};
+
+paginationHandler = function(e){
+    var entry = this.parent().parent().data('item');
+    fillPage(entry, this.parent().data('id'));
 };
 
 $(document).ready(function() {
     $(selectors.search).click(function() {
         $(selectors.modalSearch).modal('show');
     });
-
     $(selectors.modalSearchSubmit).click(function() {
         /*
          * TODO Validar entrada
          */
-
         searchByName($(selectors.modalSearchInput).val());
-
         $(selectors.modalSearch).modal('hide');
     });
+    $(selectors.parent).on('dblclick', delegate('.movies .portfolio-item img', clickHandler));
+    $(selectors.modalFull).on('click', delegate('.modal-body .pagination a', paginationHandler));
 
-    searchByName('ga');
+    $(window).on('scroll', scrollHandler);
 
-    $(parent).click(delegate('img', clickHandler));
-
-    $(parent).on('mouseenter', delegate('img', enterHandler));
-    $(parent).on('mouseleave', delegate('img', leaveHandler));
+    /*
+     * FIX listens to img in the modal
+     */
+    $(window).on('mouseenter', delegate('.movies .portfolio-item img', enterHandler));
+    $(window).on('mouseleave', delegate('.movies .portfolio-item img', leaveHandler));
 });
-
-
 
 delegate = function(selector, callback) {
     return function(e) {
@@ -143,7 +190,6 @@ delegate = function(selector, callback) {
          */
         if (!(parent = target.closest(selector)).length)
             return;
-
-        callback.call(parent.parent().parent(), e);
+        callback.call(parent, e);
     };
 };
